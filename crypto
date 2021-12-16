@@ -1,0 +1,192 @@
+# importiamo le librerie richieste
+from datetime import datetime, date
+from pprint import pprint
+from schedule import every, repeat, run_pending
+import json
+import requests
+import time
+
+
+class CryptoData:  # creo una prima classe che mi considera le prime 100 criptovalute
+    def __init__(self):
+        self.url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+        self.params = {'start': '1',
+                       'limit': '100',
+                       'convert': 'USD'}
+        self.headers = {'Accepts': 'application/json',
+                        'X-CMC_PRO_API_KEY': 'My_key', }
+
+    def fetch_currency(self):
+        data = requests.get(url=self.url, params=self.params, headers=self.headers).json()
+        return data['data']
+
+
+class SortingMktCap:  # classe che mi ritorna le prime 20 criptovalute filtrate in base alla capitalizzazione di mercato
+    def __init__(self):
+        self.url = 'https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest'
+        self.params = {
+            'start': '1',
+            'limit': '20',
+            'convert': 'USD',
+            'sort': 'market_cap'}
+        self.headers = {'Accepts': 'application/json',
+                        'X-CMC_PRO_API_KEY': 'My_key', }
+
+    def new_fetch_currency_method(self):  # la funzione di seguito mi restiusce i nuovi dati sulle prime 20 criptovalute
+        data = requests.get(url=self.url, params=self.params, headers=self.headers).json()
+        return data['data']
+
+
+@repeat(every().day.at('07:30'))  # eseguo il programma ogni giorno alle 07:30
+def create_json_file():  # funzione che mi crea il file report in json sovrascrivendone via via il contenuto
+    currency_data = CryptoData()
+    new_currency_data = SortingMktCap()
+    sort_currency = new_currency_data.new_fetch_currency_method()  # funzione per ottenere dati aggiornati sulle cripto
+    currency = currency_data.fetch_currency()  # funzione per ottenere dati aggiornati sulle cripto
+    report = {}  # dizionario che contiene le info rilevanti
+    max_vol_24h = {}
+    now = datetime.now()  # variabile temporale utilizzate per la creazione del file json
+    today = date.today()
+    json_file_name = today.strftime("%d-%m-%Y")  # nome del file json
+# step 1: voglio ottenere la critpo con il volume max nelle ultime 24 ore
+    best_volume_currency = 0  #inizializzo la variabile a cui assegnerò la crypto con il volume massimo ultime 24 ore
+    for volume_currency in currency:
+        if best_volume_currency < volume_currency['quote']['USD']['volume_24h']:
+            best_volume_currency = round(float(volume_currency['quote']['USD']['volume_24h'] / 1000000000), 2)
+            max_vol_24h.update({'Name': volume_currency['name'],
+                                'Symbol': volume_currency['symbol'],
+                                'Traded_volume_24H': f'{best_volume_currency} billion dollars',
+                                'Percent_change_24H':
+                                    f"{round(float(volume_currency['quote']['USD']['percent_change_24h']), 2)}%",
+                                'Percent_change_7_days':
+                                    f"{round(float(volume_currency['quote']['USD']['percent_change_7d']), 2)}%"
+                                })
+    report.update({'Crypto_max_volume_24h': max_vol_24h})  # aggiorno il dizionario con i dati ottenuti
+    with open(f'{json_file_name}.json', 'w') as json_file:
+        json_file.close()
+# secondo step: migliori e peggiori 10 criptovalute (per incremento in percentuale delle ultime 24 ore)
+    top_ten = []
+    worst_ten = []
+    perc_change24_lst = []
+    for i in range(len(currency)):
+        perc_change24_lst.append([currency[i]['name'],
+                                  currency[i]['symbol'],
+                                  round(float(currency[i]['quote']['USD']['percent_change_24h']), 2),
+                                  round(float(currency[i]['quote']['USD']['volume_24h'] / 1000000000), 2),
+                                  round(float(currency[i]['quote']['USD']['percent_change_7d']), 2)
+                                  ])
+    perc_change24_lst = sorted(perc_change24_lst, key=lambda x: -x[2])  #filtro le crypto rispetto a percent_change_24h
+    top_ten = perc_change24_lst[0:10]  #aggiorno la lista con le prime 10 criptovalute
+    worst_ten = perc_change24_lst[-10:]  #aggiorno la lista con le ultime 10 criptovalute
+    # classifica delle migliori 10, utilizzo la lista top_ten appena creata
+    i = 0
+    ranking = []
+    rank_dict = {}  # dizionario nel quale inserisco i due dizionari che andrò a creare
+    for i in range(len(top_ten)):
+        ranking_incr_perc = {}
+        ranking_incr_perc.update({'Position': f'{i + 1}° place',
+                                  'Name': top_ten[i][0],
+                                  'Symbol': top_ten[i][1],
+                                  'Percentage_change_24H': f'{top_ten[i][2]}%',
+                                  'Traded_volumes_24H_bil': f"{top_ten[i][3]} billion dollars",
+                                  'Percent_change_7_days': f'{top_ten[i][4]}%'})
+        ranking.append(ranking_incr_perc)
+        i += 1
+        continue
+    # classifica delle peggiori 10, utilizzo la lista worst_ten
+    decr_ranking_lst = []
+    place = 10
+    p = 0
+    for p in range(len(worst_ten)):
+        ranking_decr_perc = {}
+        ranking_decr_perc.update({'Position': f'{place}° place',
+                                  'Name': worst_ten[p][0],
+                                  'Symbol': worst_ten[p][1],
+                                  'Percentage_change_24H': f'{worst_ten[p][2]}%',
+                                  'Traded_volumes_24H_bil': f"{top_ten[p][3]} billions dollars",
+                                  'Percent_change_7_days': f'{top_ten[p][4]}%'
+                                  })
+        decr_ranking_lst.append(ranking_decr_perc)
+        p += 1
+        place -= 1
+        continue
+    rank_dict.update({'Top_ten': ranking, 'Worst_ten': decr_ranking_lst})  # aggiorno il dizionario con le liste create
+    report.update({'Best_and_worst_crypto_ranking': rank_dict})  # aggiorno il report
+    with open(f'{json_file_name}.json', 'a') as json_file:
+        json_file.close()
+# terzo step: La quantità di denaro necessaria per acquistare una unità di ciascuna delle prime 20 criptovalute
+    unity_crypto_lst = []
+    new_temp_lst = []
+    for i in range(len(sort_currency)):
+        unity_crypto_lst.append([sort_currency[i]['name'], sort_currency[i]['symbol'],
+                                 f"{round(float(sort_currency[i]['quote']['USD']['price']), 2)}$",
+                                 round(float(sort_currency[i]['quote']['USD']['percent_change_1h']), 2),
+                                 round(float(sort_currency[i]['quote']['USD']['percent_change_24h']), 2),
+                                 f"{round(float(sort_currency[i]['circulating_supply']/ 1000000000), 3)}"
+                                 ])
+        i += 1
+        continue
+    index = 0  #indice temporaneo che utilizzo per ottenere i dati cui ho bisogno
+    for index in range(len(unity_crypto_lst)):
+        money_for_buying = {}  #nuovo dizionario
+        money_for_buying.update({'Name': unity_crypto_lst[index][0],
+                                 'Symbol': unity_crypto_lst[index][1],
+                                 'Money_needed_for_one_unity': f'{unity_crypto_lst[index][2]}',
+                                 'Percent_change_1H': f"{unity_crypto_lst[index][3]}%",
+                                 'Percent_change_24H': f"{unity_crypto_lst[index][4]}%",
+                                 'Circulating_supply': f"{unity_crypto_lst[index][5]} billion dollars"
+                                 })
+        new_temp_lst.append(money_for_buying)
+        index += 1
+        continue
+    report.update({'Money_for_buying_crypto_unit': new_temp_lst})  # aggiorno il report
+    with open(f'{json_file_name}.json', 'a') as json_file:
+        json_file.close()
+# quarto step quantità di denaro necessaria per acquistare una unità di tutte le criptovalute il cui volume
+# delle ultime 24 ore sia superiore a 76.000.000
+    curr_sort_by_volume = []
+    new_currency_dict = {}
+    for crypto in currency:
+        if crypto['quote']['USD']['volume_24h'] > 76000000:
+            new_currency_dict = {'Name': crypto['name'],
+                                 'Symbol': crypto['symbol'],
+                                 'Money_needed_for_one_unity ': f"{round(float(crypto['quote']['USD']['price']),2)}$",
+                                 'Percent_change_24H':
+                                 f"{round(float(crypto['quote']['USD']['percent_change_24h']),2)}%"
+                                 }
+        curr_sort_by_volume.append(new_currency_dict)
+    report.update({'Money_needed_for_one_crypto_vol_max_76000USD': curr_sort_by_volume})  #aggiorno il report
+    with open(f'{json_file_name}.json', 'a') as json_file:
+        json_file.close()
+
+# ultimo step La percentuale di guadagno o perdita che avreste realizzato se aveste comprato una unità di
+# ciascuna delle prime 20 criptovalute il giorno prima (ipotizzando che la classifica non sia cambiata)
+    spread_lst = []
+    percent_diff_24h = 0
+    for crypto in sort_currency:
+        percent_gain_lose_dict = {'Name': crypto['name'],
+                                  'Symbol': crypto['symbol'],
+                                  'Percent_spread_24H':
+                                  f"{round(float(crypto['quote']['USD']['percent_change_24h']), 2)}%",
+                                  'Percent_change_1H':
+                                  f"{round(float(crypto['quote']['USD']['percent_change_1h']), 2)}%",
+                                  'Traded_volume_24H_bil':
+                                  f"{round(float(crypto['quote']['USD']['volume_24h'] /1000000000), 2)} "
+                                  f"billion dollars",
+                                  'Market_Cap':
+                                  f"{round(float(crypto['quote']['USD']['market_cap'] /1000000000), 2)} "
+                                  f"billion dollars"
+                                  }
+        spread_lst.append(percent_gain_lose_dict)
+    report.update({'Differential_percentage_24h': spread_lst})  #aggiorno il report
+    with open(f'{json_file_name}.json', 'a') as json_file:
+        json.dump(report, json_file, ensure_ascii=False, indent=4)  #creo il report nella sua 'versione' finale
+        json_file.close()
+        current_time = now.strftime("%H:%M:%S")
+
+    print(f'file json correctly created at {current_time}')  #output che mi avvisa sull'avvenuta creazione del file
+
+
+while True:
+    run_pending()
+    time.sleep(1)
